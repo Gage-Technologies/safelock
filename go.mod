@@ -1,4 +1,4 @@
-module github.com/deptofdefense/safelock
+module github.com/gage-technologies/safelock
 
 go 1.16
 

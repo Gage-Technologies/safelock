@@ -1,12 +1,12 @@
 package safelock
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/afero"
@@ -24,9 +24,9 @@ type FileLock struct {
 }
 
 // NewFileLock creates a new instance of FileLock
-func NewFileLock(filename string, fs afero.Fs) *FileLock {
+func NewFileLock(node uint16, filename string, fs afero.Fs) *FileLock {
 	return &FileLock{
-		SafeLock: NewSafeLock(),
+		SafeLock: NewSafeLock(node),
 		filename: filename,
 		fs:       fs,
 	}
@@ -39,7 +39,27 @@ func (l *FileLock) Lock() error {
 	// For FileLock the error is never used and the state can only be locked/unlocked
 	lockState, _ := l.GetLockState()
 	if lockState == LockStateLocked {
-		return fmt.Errorf("the object at %s is locked", l.GetFilename())
+		// conditionally handle deadlock if the lock exists and is owned by a prior session of the same node
+
+		// check the ownership of the lock
+		ownedNode, ownedSession, err := l.isSameLock()
+		if err != nil {
+			return fmt.Errorf("failed to check lock ownership: %v", err)
+		}
+
+		// release a deadlocked file lock
+		if ownedNode && !ownedSession {
+			l.mu.Lock()
+			// remove file system lock
+			err := l.fs.Remove(l.GetLockFilename())
+			if err != nil {
+				l.mu.Unlock()
+				return err
+			}
+			l.mu.Unlock()
+		} else {
+			return fmt.Errorf("the object at %s is locked", l.GetFilename())
+		}
 	}
 
 	// Lock after getting the lock state
@@ -47,14 +67,13 @@ func (l *FileLock) Lock() error {
 	defer l.mu.Unlock()
 
 	// Write object to S3
-	body := []byte(l.GetID())
 	aFile, errOpen := l.fs.OpenFile(l.GetLockFilename(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if errOpen != nil {
 		return fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
 	}
 	defer aFile.Close()
 
-	_, errWrite := aFile.Write(body)
+	_, errWrite := aFile.Write(l.GetLockBody())
 	if errWrite != nil {
 		return fmt.Errorf("unable to write data to %q: %w", l.GetLockFilename(), errWrite)
 	}
@@ -72,12 +91,12 @@ func (l *FileLock) Unlock() error {
 	}
 
 	// Validate that the lock belongs to this code
-	sameLock, errIsSameLock := l.isSameLock()
+	ownedNode, _, errIsSameLock := l.isSameLock()
 	if errIsSameLock != nil {
 		return fmt.Errorf("unable to determine if lock is the same lock: %w", errIsSameLock)
 	}
 
-	if !sameLock {
+	if !ownedNode {
 		return fmt.Errorf("the existing lock is not managed by this process")
 	}
 
@@ -121,29 +140,29 @@ func (l *FileLock) GetLockState() (LockState, error) {
 	return LockStateLocked, nil
 }
 
-// isSameLock will determine if the current lock belongs to this lock
-func (l *FileLock) isSameLock() (bool, error) {
+// isSameLock will determine if the current lock belongs to this node and session
+func (l *FileLock) isSameLock() (bool, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	aFile, errOpen := l.fs.Open(l.GetLockFilename())
 	if errOpen != nil {
-		return false, fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
+		return false, false, fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
 	}
 	defer aFile.Close()
 
 	body, errRead := ioutil.ReadAll(aFile)
 	if errRead != nil {
-		return false, errRead
+		return false, false, errRead
 	}
 
-	// If the contents of the lock and the ID are the same then it is locked
-	// Check that the strings are the same using a case-insensitive test
-	if strings.EqualFold(string(body), l.GetID()) {
-		return true, nil
+	// split the body into the node and id
+	parts := bytes.Split(body, []byte("\n"))
+	if len(parts) != 2 {
+		return false, false, fmt.Errorf("incompatible lock file format")
 	}
-	return false, nil
 
+	return bytes.Equal(parts[0], l.GetNodeBytes()), bytes.Equal(parts[1], l.GetIDBytes()), nil
 }
 
 // WaitForLock waits until an object is no longer locked or cancels based on a timeout

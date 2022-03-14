@@ -1,6 +1,8 @@
 package safelock
 
 import (
+	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -18,7 +20,7 @@ func TestFileLock(t *testing.T) {
 	filename := "file.txt"
 	lockfile := filename + DefaultSuffix
 
-	l := NewFileLock(filename, fs)
+	l := NewFileLock(0, filename, fs)
 
 	errLock := l.Lock()
 	assert.NoError(t, errLock)
@@ -30,13 +32,14 @@ func TestFileLock(t *testing.T) {
 
 	data, errReadAll := ioutil.ReadAll(aFile)
 	assert.NoError(t, errReadAll)
-	assert.Equal(t, l.GetID(), string(data))
+	assert.True(t, bytes.Equal(l.GetLockBody(), data))
 
 	errUnlock := l.Unlock()
 	assert.NoError(t, errUnlock)
 
-	_, errParse := uuid.Parse(l.GetID())
-	assert.NoError(t, errParse)
+	nodeCreation := time.Unix(0, int64(l.GetID()))
+	fmt.Println(time.Since(nodeCreation))
+	assert.True(t, time.Since(nodeCreation) < time.Second)
 
 	lockState, errGetLockState := l.GetLockState()
 	assert.NoError(t, errGetLockState)
@@ -64,7 +67,7 @@ func TestFileLockLockErrors(t *testing.T) {
 	_, errWrite := aFile.Write([]byte(uuid.New().String()))
 	assert.NoError(t, errWrite)
 
-	l := NewFileLock(filename, fs)
+	l := NewFileLock(0, filename, fs)
 
 	errLock := l.Lock()
 	assert.Error(t, errLock)
@@ -77,7 +80,7 @@ func TestFileLockUnlockErrors(t *testing.T) {
 	filename := "file.txt"
 	lockfile := filename + DefaultSuffix
 
-	l := NewFileLock(filename, fs)
+	l := NewFileLock(0, filename, fs)
 
 	errUnlock := l.Unlock()
 	assert.Error(t, errUnlock)
@@ -100,7 +103,7 @@ func TestFileLockWait(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	filename := "file.txt"
 
-	l := NewFileLock(filename, fs)
+	l := NewFileLock(0, filename, fs)
 
 	errLock := l.Lock()
 	assert.NoError(t, errLock)
@@ -122,7 +125,7 @@ func TestFileLockWaitError(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	filename := "file.txt"
 
-	l := NewFileLock(filename, fs)
+	l := NewFileLock(0, filename, fs)
 
 	// Timeout as fast as possible
 	l.SetTimeout(1 * time.Nanosecond)
@@ -130,4 +133,35 @@ func TestFileLockWaitError(t *testing.T) {
 	errWaitForLock := l.WaitForLock()
 	assert.Error(t, errWaitForLock)
 	assert.Equal(t, "unable to obtain lock after 1ns: context deadline exceeded", errWaitForLock.Error())
+}
+
+func TestFileLockDeadlockRepair(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	filename := "file.txt"
+
+	// create lock with node 0
+	l := NewFileLock(0, filename, fs)
+
+	err := l.Lock()
+	assert.NoError(t, err)
+
+	// create a new session with node 0 leaving the old lock on
+	l = NewFileLock(0, filename, fs)
+
+	// attempt to unlock the prior sessions lock
+	err = l.Unlock()
+	assert.NoError(t, err)
+
+	err = l.Lock()
+	assert.NoError(t, err)
+
+	// create a new session with node 0 leaving the old lock on
+	l = NewFileLock(0, filename, fs)
+
+	// attempt to lock on top of the old session
+	err = l.Lock()
+	assert.NoError(t, err)
+
+	err = l.Unlock()
+	assert.NoError(t, err)
 }

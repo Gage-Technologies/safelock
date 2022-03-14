@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -31,9 +30,9 @@ type S3ObjectLock struct {
 }
 
 // NewS3ObjectLock creates a new instance of S3ObjectLock
-func NewS3ObjectLock(s3bucket, s3key, s3KMSKeyArn string, svcS3 LockS3Client) *S3ObjectLock {
+func NewS3ObjectLock(node uint16, s3bucket, s3key, s3KMSKeyArn string, svcS3 LockS3Client) *S3ObjectLock {
 	return &S3ObjectLock{
-		SafeLock:    NewSafeLock(),
+		SafeLock:    NewSafeLock(node),
 		s3Bucket:    s3bucket,
 		s3Key:       s3key,
 		s3KMSKeyArn: s3KMSKeyArn,
@@ -48,7 +47,30 @@ func (l *S3ObjectLock) Lock() error {
 	// For S3ObjectLock the error is never used and the state can only be locked/unlocked
 	lockState, _ := l.GetLockState()
 	if lockState == LockStateLocked {
-		return fmt.Errorf("the object at %s is locked", l.GetObjectURI())
+		// conditionally handle deadlock if the lock exists and is owned by a prior session of the same node
+
+		// check the ownership of the lock
+		ownedNode, ownedSession, err := l.isSameLock()
+		if err != nil {
+			return fmt.Errorf("failed to check lock ownership: %v", err)
+		}
+
+		// release a deadlocked file lock
+		if ownedNode && !ownedSession {
+			l.mu.Lock()
+			// remove file system lock
+			_, err := l.svcS3.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+				Bucket: &l.s3Bucket,
+				Key:    aws.String(l.GetLockPath()),
+			})
+			if err != nil {
+				l.mu.Unlock()
+				return err
+			}
+			l.mu.Unlock()
+		} else {
+			return fmt.Errorf("the object at %s is locked", l.GetObjectURI())
+		}
 	}
 
 	// Lock after getting the lock state
@@ -56,7 +78,7 @@ func (l *S3ObjectLock) Lock() error {
 	defer l.mu.Unlock()
 
 	// Write object to S3
-	body := []byte(l.GetID())
+	body := l.GetLockBody()
 	_, errPutObject := l.svcS3.PutObject(context.TODO(), &s3.PutObjectInput{
 		ACL:                  types.ObjectCannedACLPrivate,
 		Bucket:               &l.s3Bucket,
@@ -83,12 +105,12 @@ func (l *S3ObjectLock) Unlock() error {
 	}
 
 	// Validate that the lock belongs to this code
-	sameLock, errIsSameLock := l.isSameLock()
+	ownedNode, _, errIsSameLock := l.isSameLock()
 	if errIsSameLock != nil {
 		return fmt.Errorf("unable to determine if lock is the same lock: %w", errIsSameLock)
 	}
 
-	if !sameLock {
+	if !ownedNode {
 		return fmt.Errorf("the existing lock is not managed by this process")
 	}
 
@@ -166,7 +188,7 @@ func (l *S3ObjectLock) GetLockState() (LockState, error) {
 }
 
 // isSameLock will determine if the current lock belongs to this lock
-func (l *S3ObjectLock) isSameLock() (bool, error) {
+func (l *S3ObjectLock) isSameLock() (bool, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -175,19 +197,20 @@ func (l *S3ObjectLock) isSameLock() (bool, error) {
 		Key:    aws.String(l.GetLockPath()),
 	})
 	if errGetObject != nil {
-		return false, errGetObject
+		return false, false, errGetObject
 	}
 	body, errRead := ioutil.ReadAll(getObjectOutput.Body)
 	if errRead != nil {
-		return false, errRead
+		return false, false, errRead
 	}
 
-	// If the contents of the lock and the ID are the same then it is locked
-	// Check that the strings are the same using a case-insensitive test
-	if strings.EqualFold(string(body), l.GetID()) {
-		return true, nil
+	// split the body into the node and id
+	parts := bytes.Split(body, []byte("\n"))
+	if len(parts) != 2 {
+		return false, false, fmt.Errorf("incompatible lock file format")
 	}
-	return false, nil
+
+	return bytes.Equal(parts[0], l.GetNodeBytes()), bytes.Equal(parts[1], l.GetIDBytes()), nil
 }
 
 // WaitForLock waits until an object is no longer locked or cancels based on a timeout
