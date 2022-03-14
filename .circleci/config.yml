@@ -10,6 +10,7 @@ jobs:
   # `test` tests the source code.
   test:
     executor: main
+    resource_class: small
     steps:
       - checkout
       - setup_remote_docker:
@@ -18,6 +19,7 @@ jobs:
 
   build:
     executor: main
+    resource_class: small
     steps:
       - checkout
       - setup_remote_docker:
