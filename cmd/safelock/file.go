@@ -82,7 +82,7 @@ func fileLockCmd(cmd *cobra.Command, args []string) error {
 
 	switch action {
 	case actionLock:
-		errWaitForLock := l.WaitForLock()
+		errWaitForLock := l.WaitForLock(safelock.DefaultTimeout)
 		if errWaitForLock != nil {
 			return errWaitForLock
 		}

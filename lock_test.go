@@ -40,7 +40,7 @@ func TestSafeLock(t *testing.T) {
 	assert.Equal(t, newTimeout, l.GetTimeout())
 
 	// Wait
-	errWaitForLock := l.WaitForLock()
+	errWaitForLock := l.WaitForLock(DefaultTimeout)
 	assert.NoError(t, errWaitForLock)
 
 	// SetID

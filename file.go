@@ -3,6 +3,7 @@ package safelock
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -42,13 +43,13 @@ func (l *FileLock) Lock() error {
 		// conditionally handle deadlock if the lock exists and is owned by a prior session of the same node
 
 		// check the ownership of the lock
-		ownedNode, ownedSession, err := l.isSameLock()
+		ownedNode, ownedSession, expired, err := l.lockStatus()
 		if err != nil {
 			return fmt.Errorf("failed to check lock ownership: %v", err)
 		}
 
 		// release a deadlocked file lock
-		if ownedNode && !ownedSession {
+		if (ownedNode && !ownedSession) || expired {
 			l.mu.Lock()
 			// remove file system lock
 			err := l.fs.Remove(l.GetLockFilename())
@@ -91,12 +92,12 @@ func (l *FileLock) Unlock() error {
 	}
 
 	// Validate that the lock belongs to this code
-	ownedNode, _, errIsSameLock := l.isSameLock()
+	ownedNode, _, expired, errIsSameLock := l.lockStatus()
 	if errIsSameLock != nil {
 		return fmt.Errorf("unable to determine if lock is the same lock: %w", errIsSameLock)
 	}
 
-	if !ownedNode {
+	if !ownedNode && !expired {
 		return fmt.Errorf("the existing lock is not managed by this process")
 	}
 
@@ -140,38 +141,62 @@ func (l *FileLock) GetLockState() (LockState, error) {
 	return LockStateLocked, nil
 }
 
-// isSameLock will determine if the current lock belongs to this node and session
-func (l *FileLock) isSameLock() (bool, bool, error) {
+// lockStatus load the current state of the lock
+// Returns
+// 		nodeOwned 			- bool, whether the lock is owned by this node
+//		sessionOwned 		- bool, whether the lock is owned byt his session
+//		expired 			- bool, whether the lock has passed its expiration
+func (l *FileLock) lockStatus() (bool, bool, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	aFile, errOpen := l.fs.Open(l.GetLockFilename())
 	if errOpen != nil {
-		return false, false, fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
+		return false, false, false, fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
 	}
 	defer aFile.Close()
 
 	body, errRead := ioutil.ReadAll(aFile)
 	if errRead != nil {
-		return false, false, errRead
+		return false, false, false, errRead
 	}
 
 	// split the body into the node and id
 	parts := bytes.Split(body, []byte("\n"))
-	if len(parts) != 2 {
-		return false, false, fmt.Errorf("incompatible lock file format")
+	if len(parts) != 3 {
+		return false, false, false, fmt.Errorf("incompatible lock file format")
 	}
 
-	return bytes.Equal(parts[0], l.GetNodeBytes()), bytes.Equal(parts[1], l.GetIDBytes()), nil
+	// set the default value for expiration to false
+	expired := false
+
+	// handle timestamp if there is a configured timeout on the lock
+	if l.timeout > 0 {
+		// decode the timestamp from the third position in the lock file
+		ts := time.Unix(0, int64(binary.LittleEndian.Uint64(parts[2])))
+
+		// update expired with the expiration status
+		expired = time.Since(ts) > l.timeout
+	}
+
+	return bytes.Equal(parts[0], l.GetNodeBytes()), bytes.Equal(parts[1], l.GetIDBytes()), expired, nil
 }
 
 // WaitForLock waits until an object is no longer locked or cancels based on a timeout
-func (l *FileLock) WaitForLock() error {
+func (l *FileLock) WaitForLock(timeout time.Duration) error {
 	// Do not lock/unlock the struct here or it will block getting the lock state
 
-	// Pass a context with a timeout to tell a blocking function that it
-	// should abandon its work after the timeout elapses.
-	ctx, cancel := context.WithTimeout(context.Background(), l.GetTimeout())
+	// create variable to hold the context
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	// conditionally configure the context with a timeout
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+
 	defer cancel()
 
 	for {

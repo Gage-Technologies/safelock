@@ -32,7 +32,10 @@ func TestFileLock(t *testing.T) {
 
 	data, errReadAll := ioutil.ReadAll(aFile)
 	assert.NoError(t, errReadAll)
-	assert.True(t, bytes.Equal(l.GetLockBody(), data))
+	assert.True(t, bytes.Equal(
+		bytes.Join(bytes.Split(l.GetLockBody(), []byte("\n"))[:2], []byte("\n")),
+		bytes.Join(bytes.Split(data, []byte("\n"))[:2], []byte("\n")),
+	))
 
 	errUnlock := l.Unlock()
 	assert.NoError(t, errUnlock)
@@ -49,7 +52,7 @@ func TestFileLock(t *testing.T) {
 	assert.Equal(t, filename, l.GetFilename())
 
 	// Wait
-	errWaitForLock := l.WaitForLock()
+	errWaitForLock := l.WaitForLock(DefaultTimeout)
 	assert.NoError(t, errWaitForLock)
 }
 
@@ -110,7 +113,7 @@ func TestFileLockWait(t *testing.T) {
 
 	// Spin this off in a goroutine so that we can manipulate the lock
 	go func() {
-		errWaitForLock := l.WaitForLock()
+		errWaitForLock := l.WaitForLock(DefaultTimeout)
 		assert.NoError(t, errWaitForLock)
 	}()
 
@@ -130,7 +133,7 @@ func TestFileLockWaitError(t *testing.T) {
 	// Timeout as fast as possible
 	l.SetTimeout(1 * time.Nanosecond)
 
-	errWaitForLock := l.WaitForLock()
+	errWaitForLock := l.WaitForLock(1 * time.Nanosecond)
 	assert.Error(t, errWaitForLock)
 	assert.Equal(t, "unable to obtain lock after 1ns: context deadline exceeded", errWaitForLock.Error())
 }
@@ -144,6 +147,13 @@ func TestFileLockDeadlockRepair(t *testing.T) {
 
 	err := l.Lock()
 	assert.NoError(t, err)
+
+	// create a new session with node 1 leaving the old lock on
+	l = NewFileLock(1, filename, fs)
+
+	// attempt to unlock the prior sessions lock
+	err = l.Unlock()
+	assert.Error(t, err)
 
 	// create a new session with node 0 leaving the old lock on
 	l = NewFileLock(0, filename, fs)
@@ -162,6 +172,39 @@ func TestFileLockDeadlockRepair(t *testing.T) {
 	err = l.Lock()
 	assert.NoError(t, err)
 
+	// create a new session with node 1 leaving the old lock on
+	l = NewFileLock(1, filename, fs)
+
+	// attempt to lock on top of the old session
+	err = l.Lock()
+	assert.Error(t, err)
+
+	// create a new session with node 0 leaving the old lock on
+	l = NewFileLock(0, filename, fs)
+
 	err = l.Unlock()
+	assert.NoError(t, err)
+
+	// create lock with node 0
+	l0 := NewFileLock(0, filename, fs)
+
+	err = l0.Lock()
+	assert.NoError(t, err)
+
+	l1 := NewFileLock(1, filename, fs)
+	l1.SetTimeout(time.Second * 2)
+
+	err = l1.Lock()
+	assert.Error(t, err)
+
+	err = l1.Unlock()
+	assert.Error(t, err)
+
+	time.Sleep(time.Second * 2)
+
+	err = l1.Lock()
+	assert.NoError(t, err)
+
+	err = l1.Unlock()
 	assert.NoError(t, err)
 }

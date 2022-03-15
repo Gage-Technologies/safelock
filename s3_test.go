@@ -34,7 +34,10 @@ func TestS3ObjectLock(t *testing.T) {
 	// Verify the contents of the lock file
 	data, errReadAll := ioutil.ReadAll(svcS3.PutObjectInput.Body)
 	assert.NoError(t, errReadAll)
-	assert.True(t, bytes.Equal(data, l.GetLockBody()))
+	assert.True(t, bytes.Equal(
+		bytes.Join(bytes.Split(l.GetLockBody(), []byte("\n"))[:2], []byte("\n")),
+		bytes.Join(bytes.Split(data, []byte("\n"))[:2], []byte("\n")),
+	))
 
 	// Indicate that the file exists
 	svcS3.HeadObjectOutput = &s3.HeadObjectOutput{}
@@ -69,7 +72,7 @@ func TestS3ObjectLock(t *testing.T) {
 	assert.Equal(t, "s3://bucket/key.lock", l.GetLockURI())
 
 	// Wait
-	errWaitForLock := l.WaitForLock()
+	errWaitForLock := l.WaitForLock(DefaultTimeout)
 	assert.NoError(t, errWaitForLock)
 }
 
@@ -173,7 +176,7 @@ func TestS3ObjectLockWait(t *testing.T) {
 
 	// Spin this off in a goroutine so that we can manipulate the lock
 	go func() {
-		errWaitForLock := l.WaitForLock()
+		errWaitForLock := l.WaitForLock(DefaultTimeout)
 		assert.NoError(t, errWaitForLock)
 	}()
 
@@ -196,7 +199,7 @@ func TestS3ObjectLockWaitError(t *testing.T) {
 	// Timeout as fast as possible
 	l.SetTimeout(1 * time.Microsecond)
 
-	errWaitForLock := l.WaitForLock()
+	errWaitForLock := l.WaitForLock(1 * time.Microsecond)
 	assert.Error(t, errWaitForLock)
 	assert.Equal(t, "unable to obtain lock after 1µs: context deadline exceeded", errWaitForLock.Error())
 }

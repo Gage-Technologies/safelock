@@ -43,7 +43,7 @@ type SafeLockiface interface {
 	SetLockSuffix(string)
 	GetTimeout() time.Duration
 	SetTimeout(time.Duration)
-	WaitForLock() error
+	WaitForLock(time.Duration) error
 }
 
 // SafeLock manages the internal locking and metadata for locks
@@ -139,9 +139,15 @@ func (l *SafeLock) SetNodeBytes(buf []byte) error {
 
 // GetLockBody returns the byte slice representation of the lock for the lock file
 func (l *SafeLock) GetLockBody() []byte {
+	// encode timestamp in little endian
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(time.Now().UnixNano()))
+
 	body := l.GetNodeBytes()
 	body = append(body, []byte("\n")...)
 	body = append(body, l.GetIDBytes()...)
+	body = append(body, []byte("\n")...)
+	body = append(body, buf...)
 	return body
 }
 
@@ -178,7 +184,7 @@ func (l *SafeLock) SetTimeout(timeout time.Duration) {
 }
 
 // WaitForLock waits until an object is no longer locked or cancels based on a timeout
-func (l *SafeLock) WaitForLock() error {
+func (l *SafeLock) WaitForLock(time.Duration) error {
 	// Do not lock/unlock the struct here or it will block getting the lock state
 	return nil
 }
