@@ -113,6 +113,28 @@ func (l *FileLock) Unlock() error {
 	return nil
 }
 
+// ForceUnlock will unlock despite ownership
+func (l *FileLock) ForceUnlock() error {
+
+	// Check first if the lock exists
+	// For FileLock the error is never used and the state can only be locked/unlocked
+	lockState, _ := l.GetLockState()
+	if lockState == LockStateUnlocked {
+		return fmt.Errorf("the object at %s is not locked", l.GetFilename())
+	}
+
+	// Lock after verifying the state and lock contents
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Remove object from filesystem
+	errRemove := l.fs.Remove(l.GetLockFilename())
+	if errRemove != nil {
+		return errRemove
+	}
+	return nil
+}
+
 // GetFilename will return the filename for the lock
 func (l *FileLock) GetFilename() string {
 	return l.filename

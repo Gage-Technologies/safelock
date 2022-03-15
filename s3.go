@@ -130,6 +130,31 @@ func (l *S3ObjectLock) Unlock() error {
 	return nil
 }
 
+// ForceUnlock will unlock despite ownership
+func (l *S3ObjectLock) ForceUnlock() error {
+
+	// Check first if the lock exists
+	// For S3ObjectLock the error is never used and the state can only be locked/unlocked
+	lockState, _ := l.GetLockState()
+	if lockState == LockStateUnlocked {
+		return fmt.Errorf("the object at %s is not locked", l.GetObjectURI())
+	}
+
+	// Lock after verifying the state and lock contents
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Remove object from S3
+	_, errDeleteObject := l.svcS3.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: &l.s3Bucket,
+		Key:    aws.String(l.GetLockPath()),
+	})
+	if errDeleteObject != nil {
+		return errDeleteObject
+	}
+	return nil
+}
+
 // GetS3Bucket will return the s3 bucket for the lock
 func (l *S3ObjectLock) GetS3Bucket() string {
 	return l.s3Bucket

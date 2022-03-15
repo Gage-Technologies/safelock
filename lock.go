@@ -28,6 +28,7 @@ const (
 type SafeLockiface interface {
 	Lock() error
 	Unlock() error
+	ForceUnlock() error
 	GetID() uint64
 	GetNode() uint16
 	GetIDBytes() []byte
@@ -78,6 +79,15 @@ func (l *SafeLock) Lock() error {
 
 // Unlock will unlock
 func (l *SafeLock) Unlock() error {
+	// Do operations that require the internal lock first
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// Nothing is done here
+	return nil
+}
+
+// ForceUnlock will unlock despite a lack of ownership
+func (l *SafeLock) ForceUnlock() error {
 	// Do operations that require the internal lock first
 	l.mu.Lock()
 	defer l.mu.Unlock()
