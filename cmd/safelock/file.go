@@ -9,7 +9,6 @@ import (
 	"github.com/gage-technologies/safelock"
 
 	"github.com/google/uuid"
-	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -74,8 +73,7 @@ func fileLockCmd(cmd *cobra.Command, args []string) error {
 
 	node := v.GetUint(flagFileLockNode)
 
-	fs := afero.NewOsFs()
-	l := safelock.NewFileLock(uint16(node), filename, fs)
+	l := safelock.NewFileLock(uint16(node), filename)
 
 	lockID := v.GetUint64(flagFileLockID)
 	l.SetID(lockID)

@@ -8,25 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/afero"
-
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFileLock(t *testing.T) {
-
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
+	filename := "/tmp/file1.txt"
 	lockfile := filename + DefaultSuffix
 
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	errLock := l.Lock()
 	assert.NoError(t, errLock)
 
 	// Verify the contents of the lock file
-	aFile, errOpen := fs.Open(lockfile)
+	aFile, errOpen := os.Open(lockfile)
 	assert.NoError(t, errOpen)
 	defer aFile.Close()
 
@@ -57,39 +53,33 @@ func TestFileLock(t *testing.T) {
 }
 
 func TestFileLockLockErrors(t *testing.T) {
-
-	// Pretend that the lock is locked
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
+	filename := "/tmp/file2.txt"
 	lockfile := filename + DefaultSuffix
 
-	aFile, errOpen := fs.OpenFile(lockfile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	aFile, errOpen := os.OpenFile(lockfile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	assert.NoError(t, errOpen)
 	defer aFile.Close()
 
 	_, errWrite := aFile.Write([]byte(uuid.New().String()))
 	assert.NoError(t, errWrite)
 
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	errLock := l.Lock()
 	assert.Error(t, errLock)
 }
 
 func TestFileLockUnlockErrors(t *testing.T) {
-
-	// Pretend that the lock is unlocked
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
+	filename := "/tmp/file3.txt"
 	lockfile := filename + DefaultSuffix
 
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	errUnlock := l.Unlock()
 	assert.Error(t, errUnlock)
 
 	// Indicate that the file exists
-	aFile, errOpen := fs.OpenFile(lockfile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	aFile, errOpen := os.OpenFile(lockfile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	assert.NoError(t, errOpen)
 	defer aFile.Close()
 
@@ -102,11 +92,9 @@ func TestFileLockUnlockErrors(t *testing.T) {
 }
 
 func TestFileLockWait(t *testing.T) {
+	filename := "/tmp/file4.txt"
 
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
-
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	errLock := l.Lock()
 	assert.NoError(t, errLock)
@@ -124,11 +112,9 @@ func TestFileLockWait(t *testing.T) {
 }
 
 func TestFileLockWaitError(t *testing.T) {
+	filename := "/tmp/file5.txt"
 
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
-
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	// Timeout as fast as possible
 	l.SetTimeout(1 * time.Nanosecond)
@@ -139,24 +125,23 @@ func TestFileLockWaitError(t *testing.T) {
 }
 
 func TestFileLockDeadlockRepair(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
+	filename := "/tmp/file6.txt"
 
 	// create lock with node 0
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	err := l.Lock()
 	assert.NoError(t, err)
 
 	// create a new session with node 1 leaving the old lock on
-	l = NewFileLock(1, filename, fs)
+	l = NewFileLock(1, filename)
 
 	// attempt to unlock the prior sessions lock
 	err = l.Unlock()
 	assert.Error(t, err)
 
 	// create a new session with node 0 leaving the old lock on
-	l = NewFileLock(0, filename, fs)
+	l = NewFileLock(0, filename)
 
 	// attempt to unlock the prior sessions lock
 	err = l.Unlock()
@@ -166,32 +151,32 @@ func TestFileLockDeadlockRepair(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create a new session with node 0 leaving the old lock on
-	l = NewFileLock(0, filename, fs)
+	l = NewFileLock(0, filename)
 
 	// attempt to lock on top of the old session
 	err = l.Lock()
 	assert.NoError(t, err)
 
 	// create a new session with node 1 leaving the old lock on
-	l = NewFileLock(1, filename, fs)
+	l = NewFileLock(1, filename)
 
 	// attempt to lock on top of the old session
 	err = l.Lock()
 	assert.Error(t, err)
 
 	// create a new session with node 0 leaving the old lock on
-	l = NewFileLock(0, filename, fs)
+	l = NewFileLock(0, filename)
 
 	err = l.Unlock()
 	assert.NoError(t, err)
 
 	// create lock with node 0
-	l0 := NewFileLock(0, filename, fs)
+	l0 := NewFileLock(0, filename)
 
 	err = l0.Lock()
 	assert.NoError(t, err)
 
-	l1 := NewFileLock(1, filename, fs)
+	l1 := NewFileLock(1, filename)
 	l1.SetTimeout(time.Second * 2)
 
 	err = l1.Lock()
@@ -210,17 +195,16 @@ func TestFileLockDeadlockRepair(t *testing.T) {
 }
 
 func TestFileLock_ForceUnlock(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	filename := "file.txt"
+	filename := "/tmp/file7.txt"
 
 	// create lock with node 0
-	l := NewFileLock(0, filename, fs)
+	l := NewFileLock(0, filename)
 
 	err := l.Lock()
 	assert.NoError(t, err)
 
 	// create a new session with node 1 leaving the old lock on
-	l = NewFileLock(1, filename, fs)
+	l = NewFileLock(1, filename)
 
 	// attempt to unlock the prior sessions lock
 	err = l.Unlock()

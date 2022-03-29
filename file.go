@@ -9,8 +9,6 @@ import (
 	"math/rand"
 	"os"
 	"time"
-
-	"github.com/spf13/afero"
 )
 
 // FileLock will create a lock for a specific file
@@ -19,17 +17,14 @@ import (
 // UUID.
 type FileLock struct {
 	*SafeLock
-
 	filename string
-	fs       afero.Fs
 }
 
 // NewFileLock creates a new instance of FileLock
-func NewFileLock(node uint16, filename string, fs afero.Fs) *FileLock {
+func NewFileLock(node uint16, filename string) *FileLock {
 	return &FileLock{
 		SafeLock: NewSafeLock(node),
 		filename: filename,
-		fs:       fs,
 	}
 }
 
@@ -52,7 +47,7 @@ func (l *FileLock) Lock() error {
 		if (ownedNode && !ownedSession) || expired {
 			l.mu.Lock()
 			// remove file system lock
-			err := l.fs.Remove(l.GetLockFilename())
+			err := os.Remove(l.GetLockFilename())
 			if err != nil {
 				l.mu.Unlock()
 				return err
@@ -68,7 +63,7 @@ func (l *FileLock) Lock() error {
 	defer l.mu.Unlock()
 
 	// Write object to S3
-	aFile, errOpen := l.fs.OpenFile(l.GetLockFilename(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	aFile, errOpen := os.OpenFile(l.GetLockFilename(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if errOpen != nil {
 		return fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
 	}
@@ -106,7 +101,7 @@ func (l *FileLock) Unlock() error {
 	defer l.mu.Unlock()
 
 	// Remove object from filesystem
-	errRemove := l.fs.Remove(l.GetLockFilename())
+	errRemove := os.Remove(l.GetLockFilename())
 	if errRemove != nil {
 		return errRemove
 	}
@@ -128,7 +123,7 @@ func (l *FileLock) ForceUnlock() error {
 	defer l.mu.Unlock()
 
 	// Remove object from filesystem
-	errRemove := l.fs.Remove(l.GetLockFilename())
+	errRemove := os.Remove(l.GetLockFilename())
 	if errRemove != nil {
 		return errRemove
 	}
@@ -151,7 +146,7 @@ func (l *FileLock) GetLockState() (LockState, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	_, errStat := l.fs.Stat(l.GetLockFilename())
+	_, errStat := os.Stat(l.GetLockFilename())
 	if errStat != nil {
 		if os.IsNotExist(errStat) {
 			// Throw away the error here because it means the file doesn't exist
@@ -172,7 +167,7 @@ func (l *FileLock) lockStatus() (bool, bool, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	aFile, errOpen := l.fs.Open(l.GetLockFilename())
+	aFile, errOpen := os.Open(l.GetLockFilename())
 	if errOpen != nil {
 		return false, false, false, fmt.Errorf("unable to open %q: %w", l.GetLockFilename(), errOpen)
 	}
