@@ -11,6 +11,9 @@ jobs:
   test:
     executor: main
     resource_class: small
+    docker:
+      - image: redislabs/rebloom:latest
+        command: redis-server --loadmodule /usr/lib/redis/modules/redisbloom.so --protected-mode no
     steps:
       - checkout
       - setup_remote_docker:
